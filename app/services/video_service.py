@@ -1,185 +1,198 @@
 import yt_dlp
 import asyncio
 import logging
-from typing import Dict, List, Optional, Any
+import os
+from typing import Dict, Any
 from app.models import VideoInfo, VideoFormat, VideoQuality
 from app.utils.validators import URLValidator
-from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Cookie file path — upload cookies.txt to repo root
+COOKIE_FILE = 'cookies.txt' if os.path.exists('cookies.txt') else None
+
 
 class VideoDownloadService:
-    """Service for downloading videos from all major social media platforms using yt-dlp"""
+    """Download videos from all major social media platforms using yt-dlp"""
 
-    BASE_YDL_OPTS = {
-        'quiet': True,
-        'no_warnings': False,
-        'extractaudio': False,
-        'outtmpl': '/tmp/%(title)s.%(ext)s',
-        'retries': 5,
-        'fragment_retries': 5,
-        'ignoreerrors': False,
-        'no_check_certificate': True,
-        'cookiefile': None,
-        'extract_flat': False,
-        'user_agent': (
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-            'AppleWebKit/537.36 (KHTML, like Gecko) '
-            'Chrome/120.0.0.0 Safari/537.36'
-        ),
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'merge_output_format': 'mp4',
-        'postprocessors': [{
-            'key': 'FFmpegVideoConvertor',
-            'preferedformat': 'mp4',
-        }],
+    USER_AGENT = (
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) '
+        'Chrome/120.0.0.0 Safari/537.36'
+    )
+
+    QUALITY_MAP = {
+        VideoQuality.BEST:  'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        VideoQuality.WORST: 'worstvideo+worstaudio/worst',
+        VideoQuality.P360:  'bestvideo[height<=360]+bestaudio/best[height<=360]',
+        VideoQuality.P720:  'bestvideo[height<=720]+bestaudio/best[height<=720]',
+        VideoQuality.P1080: 'bestvideo[height<=1080]+bestaudio/best[height<=1080]',
     }
 
-    # Platform-specific yt-dlp option overrides
-    PLATFORM_OPTS = {
-        'tiktok': {
-            'extractor_args': {'tiktok': {'app_version': '20.9.3', 'manifest_app_version': '209'}},
-        },
-        'twitter': {
-            # Twitter/X sometimes needs different handling
-        },
-        'instagram': {
-            # Instagram may need cookies for private content
-        },
-    }
+    def _base_opts(self) -> dict:
+        return {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': False,
+            'no_check_certificate': True,
+            'retries': 3,
+            'fragment_retries': 3,
+            'user_agent': self.USER_AGENT,
+            'http_headers': {
+                'User-Agent': self.USER_AGENT,
+                'Accept-Language': 'en-US,en;q=0.9',
+            },
+            # Use cookie file if available (helps YouTube, Instagram)
+            **({'cookiefile': COOKIE_FILE} if COOKIE_FILE else {}),
+        }
 
-    def __init__(self):
-        self.ydl_opts = self.BASE_YDL_OPTS.copy()
+    def _build_opts(self, quality: VideoQuality, platform: str) -> dict:
+        opts = self._base_opts()
+        opts['format'] = self.QUALITY_MAP.get(quality, self.QUALITY_MAP[VideoQuality.BEST])
+
+        # Platform-specific tweaks
+        if platform == 'youtube':
+            # YouTube: use po_token workaround + android client
+            opts['extractor_args'] = {
+                'youtube': {
+                    'player_client': ['android', 'web'],
+                    'skip': ['hls', 'dash'],
+                }
+            }
+            # If no cookie file, try with age bypass
+            if not COOKIE_FILE:
+                opts['age_limit'] = 99
+
+        elif platform == 'tiktok':
+            opts['extractor_args'] = {
+                'tiktok': {
+                    'app_version': '20.9.3',
+                    'manifest_app_version': '209',
+                }
+            }
+            # TikTok: prefer direct mp4, skip HLS
+            opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/download'
+
+        elif platform == 'instagram':
+            # Instagram needs cookies for most content
+            opts['extractor_args'] = {
+                'instagram': {'include_feeds': ['reels']}
+            }
+
+        elif platform == 'twitter':
+            opts['extractor_args'] = {
+                'twitter': {'api': ['syndication']}
+            }
+
+        return opts
 
     async def get_video_info(self, url: str, quality: VideoQuality = VideoQuality.BEST) -> Dict[str, Any]:
-        """Extract video information and download URLs from any supported platform"""
-
         if not URLValidator.is_valid_url(url):
             raise ValueError("অবৈধ URL। সঠিক ভিডিও লিংক দিন।")
 
-        normalized_url = URLValidator.normalize_url(url)
-        platform = URLValidator.detect_platform(normalized_url)
+        url = URLValidator.normalize_url(url)
+        platform = URLValidator.detect_platform(url)
 
-        # Resolve short URLs for Facebook
-        if 'fb.watch' in normalized_url:
-            normalized_url = await self._resolve_redirect_url(normalized_url)
+        if 'fb.watch' in url:
+            url = await self._resolve_redirect(url)
 
+        loop = asyncio.get_event_loop()
         try:
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                self._extract_info,
-                normalized_url,
-                quality,
-                platform
+            return await loop.run_in_executor(
+                None, self._extract, url, quality, platform
             )
-            return result
-
+        except ValueError:
+            raise
         except Exception as e:
-            logger.error(f"Error extracting video info: {str(e)}")
-            raise ValueError(f"ভিডিও তথ্য বের করতে ব্যর্থ: {str(e)}")
+            logger.error(f"Extraction error: {e}")
+            raise ValueError(f"ভিডিও প্রসেস করতে ব্যর্থ: {str(e)}")
 
-    async def _resolve_redirect_url(self, url: str) -> str:
-        """Resolve short/redirect URLs to their final destination"""
+    async def _resolve_redirect(self, url: str) -> str:
         import aiohttp
         try:
-            timeout = aiohttp.ClientTimeout(total=15)
-            headers = {
-                'User-Agent': self.BASE_YDL_OPTS['user_agent'],
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            }
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                current_url = url
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as s:
                 for _ in range(5):
-                    async with session.get(current_url, allow_redirects=False, headers=headers) as resp:
-                        if resp.status in (301, 302, 303, 307, 308):
-                            location = resp.headers.get('Location', '')
-                            if location:
-                                if location.startswith('/'):
-                                    from urllib.parse import urljoin
-                                    location = urljoin(current_url, location)
-                                current_url = location
+                    async with s.get(url, allow_redirects=False,
+                                     headers={'User-Agent': self.USER_AGENT}) as r:
+                        if r.status in (301, 302, 303, 307, 308):
+                            loc = r.headers.get('Location', '')
+                            if loc:
+                                url = loc if loc.startswith('http') else f"https://facebook.com{loc}"
                             else:
                                 break
                         else:
                             break
-            return current_url
         except Exception as e:
-            logger.warning(f"Could not resolve redirect URL: {e}")
-            return url
+            logger.warning(f"Redirect resolve failed: {e}")
+        return url
 
-    def _build_ydl_opts(self, quality: VideoQuality, platform: str) -> dict:
-        """Build yt-dlp options based on quality and platform"""
-        opts = self.BASE_YDL_OPTS.copy()
-
-        # Apply platform-specific overrides
-        if platform in self.PLATFORM_OPTS:
-            opts.update(self.PLATFORM_OPTS[platform])
-
-        # Quality selector
-        quality_map = {
-            VideoQuality.BEST:  'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            VideoQuality.WORST: 'worstvideo[ext=mp4]+worstaudio[ext=m4a]/worst[ext=mp4]/worst',
-            VideoQuality.P360:  'bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360][ext=mp4]/best[height<=360]',
-            VideoQuality.P720:  'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]',
-            VideoQuality.P1080: 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best[height<=1080]',
-        }
-        opts['format'] = quality_map.get(quality, quality_map[VideoQuality.BEST])
-        return opts
-
-    def _extract_info(self, url: str, quality: VideoQuality, platform: str) -> Dict[str, Any]:
-        """Extract video information using yt-dlp (runs in thread executor)"""
-        opts = self._build_ydl_opts(quality, platform)
+    def _extract(self, url: str, quality: VideoQuality, platform: str) -> Dict[str, Any]:
+        opts = self._build_opts(quality, platform)
 
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
                 if not info:
                     raise ValueError("কোনো ভিডিও তথ্য পাওয়া যায়নি।")
-                return self._process_video_info(info, platform)
+                return self._process(info, platform)
 
         except yt_dlp.DownloadError as e:
-            error_msg = str(e)
-            if 'private' in error_msg.lower() or 'not available' in error_msg.lower():
+            msg = str(e).lower()
+            if 'sign in' in msg or 'bot' in msg or 'cookie' in msg:
+                if platform == 'youtube':
+                    raise ValueError(
+                        "YouTube এই মুহূর্তে cookies ছাড়া কাজ করছে না। "
+                        "repo-তে cookies.txt যোগ করুন।"
+                    )
+                raise ValueError("এই ভিডিও দেখতে login দরকার। cookies.txt যোগ করুন।")
+            elif 'private' in msg or 'not available' in msg:
                 raise ValueError("এই ভিডিওটি প্রাইভেট অথবা উপলব্ধ নয়।")
-            elif 'age' in error_msg.lower():
+            elif 'age' in msg:
                 raise ValueError("এই ভিডিওতে বয়স সীমাবদ্ধতা রয়েছে।")
-            elif 'unsupported url' in error_msg.lower():
-                raise ValueError(f"এই প্ল্যাটফর্ম বা URL সাপোর্টেড নয়: {url}")
-            elif 'redirect' in error_msg.lower():
-                raise ValueError("URL রিডাইরেক্ট সমস্যা। সরাসরি ভিডিও লিংক কপি করে দিন।")
+            elif 'unsupported url' in msg:
+                raise ValueError("এই প্ল্যাটফর্ম সাপোর্টেড নয়।")
             else:
-                raise ValueError(f"ভিডিও এক্সট্র্যাক্ট করতে ব্যর্থ: {error_msg}")
+                raise ValueError(f"ডাউনলোড ত্রুটি: {str(e)}")
+        except ValueError:
+            raise
         except Exception as e:
             raise ValueError(f"অপ্রত্যাশিত ত্রুটি: {str(e)}")
 
-    def _process_video_info(self, info: Dict[str, Any], platform: str) -> Dict[str, Any]:
-        """Process and structure video information"""
+    def _process(self, info: Dict[str, Any], platform: str) -> Dict[str, Any]:
         video_info = VideoInfo(
-            title=info.get('title', 'Unknown Title'),
+            title=info.get('title', 'Unknown'),
             duration=info.get('duration'),
             thumbnail=info.get('thumbnail'),
-            uploader=info.get('uploader') or info.get('channel'),
+            uploader=info.get('uploader') or info.get('channel') or info.get('creator'),
             view_count=info.get('view_count'),
             upload_date=info.get('upload_date'),
         )
 
-        download_url = info.get('url')
+        # Best download URL
+        download_url = info.get('url') or info.get('webpage_url')
 
-        available_formats = []
+        # Collect available formats
+        formats = []
+        seen = set()
         for fmt in info.get('formats', []):
-            if fmt.get('url') and fmt.get('height'):
-                video_format = VideoFormat(
-                    quality=f"{fmt['height']}p",
-                    format_id=fmt.get('format_id', ''),
-                    ext=fmt.get('ext', 'mp4'),
-                    filesize=fmt.get('filesize'),
-                    url=fmt['url'],
-                )
-                available_formats.append(video_format)
+            url = fmt.get('url', '')
+            height = fmt.get('height')
+            ext = fmt.get('ext', 'mp4')
+            if not url or not height:
+                continue
+            key = (height, ext)
+            if key in seen:
+                continue
+            seen.add(key)
+            formats.append(VideoFormat(
+                quality=f"{height}p",
+                format_id=fmt.get('format_id', ''),
+                ext=ext,
+                filesize=fmt.get('filesize') or fmt.get('filesize_approx'),
+                url=url,
+            ))
 
-        available_formats.sort(
+        formats.sort(
             key=lambda x: int(x.quality.replace('p', '')) if x.quality.replace('p', '').isdigit() else 0,
             reverse=True,
         )
@@ -187,10 +200,9 @@ class VideoDownloadService:
         return {
             'video_info': video_info,
             'download_url': download_url,
-            'available_formats': available_formats[:10],
+            'available_formats': formats[:10],
             'platform': platform,
         }
 
 
-# Global service instance
 video_service = VideoDownloadService()
