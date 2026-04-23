@@ -239,7 +239,7 @@ const PLATFORM_INFO = {
 };
 
 // Platforms where we open direct URL (CDN links expire quickly)
-const DIRECT_LINK_PLATFORMS = ['tiktok', 'twitter', 'reddit', 'vimeo', 'dailymotion'];
+// All platforms now go through server-side proxy to avoid 403 errors
 
 let currentResult = null;
 
@@ -378,9 +378,7 @@ function showResult(data) {
     const fBody = document.getElementById('formatsBody');
     if (formats.length) {
         fBody.innerHTML = formats.map(f => {
-            const dlUrl = DIRECT_LINK_PLATFORMS.includes(platform)
-                ? f.url  // open direct
-                : `/stream/video?url=${encodeURIComponent(f.url)}`;
+            const dlUrl = `/stream/video?url=${encodeURIComponent(f.url)}&platform=${platform}`;
             return `<tr>
                 <td><span style="font-weight:600;color:#a5b4fc">${f.quality}</span></td>
                 <td><span style="color:#94a3b8">${(f.ext||'mp4').toUpperCase()}</span></td>
@@ -405,7 +403,7 @@ function downloadBest() {
     const platform = currentResult.platform || 'unknown';
     const url = DIRECT_LINK_PLATFORMS.includes(platform)
         ? currentResult.download_url
-        : `/stream/video?url=${encodeURIComponent(currentResult.download_url)}`;
+        : `/stream/video?url=${encodeURIComponent(currentResult.download_url)}&platform=${platform}`;
     window.open(url, '_blank');
 }
 
