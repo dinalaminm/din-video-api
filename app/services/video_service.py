@@ -2,23 +2,22 @@ import yt_dlp
 import asyncio
 import logging
 import os
+import tempfile
 from typing import Dict, Any
 from app.models import VideoInfo, VideoFormat, VideoQuality
 from app.utils.validators import URLValidator
 
 logger = logging.getLogger(__name__)
 
-# Cookie file path — upload cookies.txt to repo root
 COOKIE_FILE = 'cookies.txt' if os.path.exists('cookies.txt') else None
 
 
 class VideoDownloadService:
-    """Download videos from all major social media platforms using yt-dlp"""
 
     USER_AGENT = (
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+        'Mozilla/5.0 (Linux; Android 12; SM-G991B) '
         'AppleWebKit/537.36 (KHTML, like Gecko) '
-        'Chrome/120.0.0.0 Safari/537.36'
+        'Chrome/120.0.6099.144 Mobile Safari/537.36'
     )
 
     QUALITY_MAP = {
@@ -29,52 +28,53 @@ class VideoDownloadService:
         VideoQuality.P1080: 'bestvideo[height<=1080]+bestaudio/best[height<=1080]',
     }
 
-    def _base_opts(self) -> dict:
-        return {
+    def _base_opts(self, platform: str) -> dict:
+        opts = {
             'quiet': True,
             'no_warnings': True,
             'extract_flat': False,
             'no_check_certificate': True,
             'retries': 3,
             'fragment_retries': 3,
-            'user_agent': self.USER_AGENT,
+            'socket_timeout': 30,
             'http_headers': {
                 'User-Agent': self.USER_AGENT,
                 'Accept-Language': 'en-US,en;q=0.9',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             },
-            # Use cookie file if available (helps YouTube, Instagram)
-            **({'cookiefile': COOKIE_FILE} if COOKIE_FILE else {}),
         }
 
-    def _build_opts(self, quality: VideoQuality, platform: str) -> dict:
-        opts = self._base_opts()
-        opts['format'] = self.QUALITY_MAP.get(quality, self.QUALITY_MAP[VideoQuality.BEST])
+        if COOKIE_FILE:
+            opts['cookiefile'] = COOKIE_FILE
 
-        # Platform-specific tweaks
+        # Platform-specific options
         if platform == 'youtube':
-            # YouTube: use po_token workaround + android client
             opts['extractor_args'] = {
                 'youtube': {
                     'player_client': ['android', 'web'],
-                    'skip': ['hls', 'dash'],
+                    'player_skip': ['webpage'],
                 }
             }
-            # If no cookie file, try with age bypass
-            if not COOKIE_FILE:
-                opts['age_limit'] = 99
 
         elif platform == 'tiktok':
+            # TikTok: use mobile app API
             opts['extractor_args'] = {
                 'tiktok': {
+                    'app_name': 'tiktok_web',
                     'app_version': '20.9.3',
-                    'manifest_app_version': '209',
                 }
             }
-            # TikTok: prefer direct mp4, skip HLS
-            opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/download'
+            opts['http_headers'] = {
+                'User-Agent': (
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                    'AppleWebKit/537.36 (KHTML, like Gecko) '
+                    'Chrome/120.0.0.0 Safari/537.36'
+                ),
+                'Referer': 'https://www.tiktok.com/',
+                'Accept-Language': 'en-US,en;q=0.9',
+            }
 
         elif platform == 'instagram':
-            # Instagram needs cookies for most content
             opts['extractor_args'] = {
                 'instagram': {'include_feeds': ['reels']}
             }
@@ -85,6 +85,34 @@ class VideoDownloadService:
             }
 
         return opts
+
+    def _build_opts(self, quality: VideoQuality, platform: str) -> dict:
+        opts = self._base_opts(platform)
+        opts['format'] = self.QUALITY_MAP.get(quality, self.QUALITY_MAP[VideoQuality.BEST])
+        return opts
+
+    # ── TikTok: actually download to temp file, return local path ──────────
+    def _download_tiktok(self, url: str) -> tuple[str, dict]:
+        """Download TikTok video to a temp file and return (filepath, info)"""
+        tmp_dir = tempfile.mkdtemp()
+        opts = self._base_opts('tiktok')
+        opts.update({
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            'outtmpl': os.path.join(tmp_dir, '%(id)s.%(ext)s'),
+            'merge_output_format': 'mp4',
+        })
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            # Find the downloaded file
+            video_id = info.get('id', 'video')
+            ext = info.get('ext', 'mp4')
+            filepath = os.path.join(tmp_dir, f"{video_id}.{ext}")
+            if not os.path.exists(filepath):
+                # Search for any mp4 in tmp_dir
+                files = [f for f in os.listdir(tmp_dir) if f.endswith('.mp4')]
+                if files:
+                    filepath = os.path.join(tmp_dir, files[0])
+            return filepath, info
 
     async def get_video_info(self, url: str, quality: VideoQuality = VideoQuality.BEST) -> Dict[str, Any]:
         if not URLValidator.is_valid_url(url):
@@ -116,10 +144,7 @@ class VideoDownloadService:
                                      headers={'User-Agent': self.USER_AGENT}) as r:
                         if r.status in (301, 302, 303, 307, 308):
                             loc = r.headers.get('Location', '')
-                            if loc:
-                                url = loc if loc.startswith('http') else f"https://facebook.com{loc}"
-                            else:
-                                break
+                            url = loc if loc.startswith('http') else f"https://facebook.com{loc}"
                         else:
                             break
         except Exception as e:
@@ -134,7 +159,7 @@ class VideoDownloadService:
                 info = ydl.extract_info(url, download=False)
                 if not info:
                     raise ValueError("কোনো ভিডিও তথ্য পাওয়া যায়নি।")
-                return self._process(info, platform)
+                return self._process(info, platform, url)
 
         except yt_dlp.DownloadError as e:
             msg = str(e).lower()
@@ -158,7 +183,7 @@ class VideoDownloadService:
         except Exception as e:
             raise ValueError(f"অপ্রত্যাশিত ত্রুটি: {str(e)}")
 
-    def _process(self, info: Dict[str, Any], platform: str) -> Dict[str, Any]:
+    def _process(self, info: Dict[str, Any], platform: str, original_url: str) -> Dict[str, Any]:
         video_info = VideoInfo(
             title=info.get('title', 'Unknown'),
             duration=info.get('duration'),
@@ -168,28 +193,31 @@ class VideoDownloadService:
             upload_date=info.get('upload_date'),
         )
 
-        # Best download URL
         download_url = info.get('url') or info.get('webpage_url')
 
-        # Collect available formats
+        # Collect available formats — include audio-only if no height (TikTok often does this)
         formats = []
         seen = set()
         for fmt in info.get('formats', []):
-            url = fmt.get('url', '')
+            furl = fmt.get('url', '')
             height = fmt.get('height')
             ext = fmt.get('ext', 'mp4')
-            if not url or not height:
+            vcodec = fmt.get('vcodec', '')
+            if not furl:
                 continue
-            key = (height, ext)
+            if vcodec == 'none':
+                continue  # skip audio-only
+            quality_label = f"{height}p" if height else 'auto'
+            key = (quality_label, ext)
             if key in seen:
                 continue
             seen.add(key)
             formats.append(VideoFormat(
-                quality=f"{height}p",
+                quality=quality_label,
                 format_id=fmt.get('format_id', ''),
                 ext=ext,
                 filesize=fmt.get('filesize') or fmt.get('filesize_approx'),
-                url=url,
+                url=furl,
             ))
 
         formats.sort(
@@ -202,6 +230,7 @@ class VideoDownloadService:
             'download_url': download_url,
             'available_formats': formats[:10],
             'platform': platform,
+            'original_url': original_url,
         }
 
 
