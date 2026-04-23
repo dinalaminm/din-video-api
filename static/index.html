@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Social Video Downloader</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --grad-start: #6366f1;
+            --grad-end:   #8b5cf6;
+        }
+        body { background: #0f0f1a; color: #e2e8f0; font-family: 'Segoe UI', sans-serif; }
+
+        .gradient-bg { background: linear-gradient(135deg, var(--grad-start), var(--grad-end)); }
+
+        .glass {
+            background: rgba(255,255,255,0.06);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .platform-badge {
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 4px 10px; border-radius: 99px; font-size: 12px; font-weight: 600;
+        }
+
+        /* Platform colours */
+        .badge-facebook  { background:#1877f222; color:#1877f2; border:1px solid #1877f244; }
+        .badge-youtube   { background:#ff000022; color:#ff4444; border:1px solid #ff000044; }
+        .badge-tiktok    { background:#00f2ea22; color:#00f2ea; border:1px solid #00f2ea44; }
+        .badge-instagram { background:#e1306c22; color:#e1306c; border:1px solid #e1306c44; }
+        .badge-twitter   { background:#1da1f222; color:#1da1f2; border:1px solid #1da1f244; }
+        .badge-reddit    { background:#ff451422; color:#ff4514; border:1px solid #ff451444; }
+        .badge-vimeo     { background:#1ab7ea22; color:#1ab7ea; border:1px solid #1ab7ea44; }
+        .badge-dailymotion { background:#0099cc22; color:#0099cc; border:1px solid #0099cc44; }
+        .badge-twitch    { background:#9146ff22; color:#9146ff; border:1px solid #9146ff44; }
+        .badge-pinterest { background:#e6001922; color:#e60019; border:1px solid #e6001944; }
+        .badge-linkedin  { background:#0077b522; color:#0077b5; border:1px solid #0077b544; }
+        .badge-snapchat  { background:#fffc0022; color:#d4d400; border:1px solid #fffc0044; }
+        .badge-unknown   { background:#ffffff22; color:#aaa; border:1px solid #ffffff22; }
+
+        .platform-icon { width:32px; height:32px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; }
+
+        .url-input {
+            background: rgba(255,255,255,0.05);
+            border: 1.5px solid rgba(255,255,255,0.12);
+            color: #e2e8f0;
+            border-radius: 12px;
+            padding: 14px 48px 14px 16px;
+            width: 100%;
+            font-size: 15px;
+            transition: border-color .2s, box-shadow .2s;
+        }
+        .url-input:focus { outline:none; border-color:#6366f1; box-shadow:0 0 0 3px rgba(99,102,241,.2); }
+        .url-input::placeholder { color: #64748b; }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            color: white; border: none; border-radius: 12px;
+            padding: 14px 28px; font-weight: 700; font-size: 15px;
+            cursor: pointer; transition: opacity .2s, transform .1s;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .btn-primary:hover:not(:disabled) { opacity:.9; transform:translateY(-1px); }
+        .btn-primary:disabled { opacity:.5; cursor:not-allowed; }
+
+        .btn-download {
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: white; border-radius: 10px; padding: 10px 18px;
+            font-weight: 600; font-size: 13px; cursor: pointer;
+            display: inline-flex; align-items: center; gap: 6px;
+            text-decoration: none; transition: opacity .2s;
+        }
+        .btn-download:hover { opacity:.85; }
+
+        .quality-radio { display:none; }
+        .quality-label {
+            border: 1.5px solid rgba(255,255,255,0.1);
+            border-radius: 10px; padding: 8px 14px; cursor: pointer;
+            font-size:13px; font-weight:600; transition:.2s;
+            color: #94a3b8;
+        }
+        .quality-radio:checked + .quality-label {
+            border-color: #6366f1; background: rgba(99,102,241,0.15); color: #a5b4fc;
+        }
+
+        .result-card { animation: fadeUp .4s ease; }
+        @keyframes fadeUp {
+            from { opacity:0; transform:translateY(16px); }
+            to   { opacity:1; transform:translateY(0); }
+        }
+
+        .spinner {
+            border: 3px solid rgba(255,255,255,.1);
+            border-top-color: #fff;
+            border-radius: 50%; width:20px; height:20px;
+            animation: spin .8s linear infinite; display:inline-block;
+        }
+        @keyframes spin { to { transform:rotate(360deg); } }
+
+        .supported-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px;
+        }
+        .sup-item {
+            background: rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.08);
+            border-radius: 10px; padding: 10px 14px;
+            display:flex; align-items:center; gap:8px; font-size:13px;
+        }
+
+        .format-table { width:100%; border-collapse:collapse; }
+        .format-table th { color:#94a3b8; font-size:12px; text-align:left; padding:8px 10px; }
+        .format-table td { padding:8px 10px; font-size:13px; border-top:1px solid rgba(255,255,255,.07); }
+
+        .toast {
+            position:fixed; bottom:24px; right:24px;
+            background:#1e293b; border:1px solid rgba(255,255,255,.12);
+            border-radius:12px; padding:12px 20px; font-size:14px;
+            display:flex; align-items:center; gap:10px;
+            box-shadow: 0 8px 32px rgba(0,0,0,.4);
+            animation: fadeUp .3s ease; z-index:999;
+        }
+    </style>
+</head>
+<body>
+
+<!-- Header -->
+<header class="gradient-bg py-5 px-4 shadow-lg">
+    <div class="max-w-3xl mx-auto flex items-center gap-3">
+        <div style="background:rgba(255,255,255,.15); border-radius:12px; padding:8px 12px; font-size:22px;">⬇️</div>
+        <div>
+            <h1 class="text-xl font-bold text-white">Social Video Downloader</h1>
+            <p class="text-purple-200 text-xs">Facebook · YouTube · TikTok · Instagram · Twitter + আরো</p>
+        </div>
+    </div>
+</header>
+
+<main class="max-w-3xl mx-auto px-4 py-8 space-y-6">
+
+    <!-- Input Card -->
+    <div class="glass rounded-2xl p-6">
+        <label class="block text-sm font-semibold text-slate-300 mb-3">🔗 ভিডিও লিংক পেস্ট করুন</label>
+        <div class="relative mb-4">
+            <input id="videoUrl" type="url" class="url-input"
+                placeholder="https://www.youtube.com/watch?v=... অথবা TikTok, Instagram, Facebook লিংক">
+            <button id="pasteBtn" title="Paste" onclick="pasteUrl()"
+                style="position:absolute; right:12px; top:50%; transform:translateY(-50%); background:rgba(255,255,255,.08); border:none; color:#94a3b8; padding:5px 8px; border-radius:7px; cursor:pointer; font-size:13px;">
+                📋
+            </button>
+        </div>
+
+        <!-- Platform indicator -->
+        <div id="platformIndicator" class="mb-4 hidden">
+            <span id="platformBadge" class="platform-badge"></span>
+        </div>
+
+        <!-- Quality -->
+        <div class="mb-5">
+            <p class="text-sm text-slate-400 mb-2 font-medium">📹 ভিডিও কোয়ালিটি</p>
+            <div class="flex flex-wrap gap-2">
+                <input type="radio" name="quality" id="q_best" value="best" class="quality-radio" checked>
+                <label for="q_best" class="quality-label">✨ সেরা</label>
+
+                <input type="radio" name="quality" id="q_1080" value="1080p" class="quality-radio">
+                <label for="q_1080" class="quality-label">🎬 1080p</label>
+
+                <input type="radio" name="quality" id="q_720" value="720p" class="quality-radio">
+                <label for="q_720" class="quality-label">📺 720p</label>
+
+                <input type="radio" name="quality" id="q_360" value="360p" class="quality-radio">
+                <label for="q_360" class="quality-label">📱 360p</label>
+
+                <input type="radio" name="quality" id="q_worst" value="worst" class="quality-radio">
+                <label for="q_worst" class="quality-label">🔋 সবচেয়ে ছোট</label>
+            </div>
+        </div>
+
+        <button id="downloadBtn" class="btn-primary w-full justify-center" onclick="fetchVideo()">
+            <i class="fas fa-download"></i> ডাউনলোড লিংক বের করুন
+        </button>
+    </div>
+
+    <!-- Result Card -->
+    <div id="resultCard" class="glass rounded-2xl p-6 result-card hidden">
+        <div class="flex items-start gap-4 mb-5">
+            <img id="thumbnail" src="" alt="thumbnail"
+                class="rounded-xl object-cover flex-shrink-0"
+                style="width:120px; height:80px;" onerror="this.style.display='none'">
+            <div class="flex-1 min-w-0">
+                <div id="platformResult" class="mb-1"></div>
+                <h3 id="videoTitle" class="font-bold text-base text-white mb-1 truncate"></h3>
+                <div class="flex flex-wrap gap-3 text-xs text-slate-400">
+                    <span id="videoDuration"></span>
+                    <span id="videoUploader"></span>
+                    <span id="videoViews"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Best download button -->
+        <a id="bestDownload" href="#" target="_blank" class="btn-download mb-4 inline-flex">
+            <i class="fas fa-download"></i> সেরা কোয়ালিটিতে ডাউনলোড
+        </a>
+
+        <!-- Formats table -->
+        <div id="formatsSection" class="hidden mt-4">
+            <p class="text-sm font-semibold text-slate-300 mb-2">🎞️ সব ফরম্যাট</p>
+            <div class="glass rounded-xl overflow-hidden">
+                <table class="format-table">
+                    <thead>
+                        <tr>
+                            <th>কোয়ালিটি</th>
+                            <th>ফরম্যাট</th>
+                            <th>সাইজ</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="formatsBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Error Card -->
+    <div id="errorCard" class="glass rounded-2xl p-5 hidden" style="border-color:rgba(239,68,68,.3);">
+        <div class="flex items-start gap-3">
+            <span style="font-size:20px;">❌</span>
+            <div>
+                <p class="font-semibold text-red-400 mb-1">সমস্যা হয়েছে</p>
+                <p id="errorMsg" class="text-slate-300 text-sm"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Supported Platforms -->
+    <div class="glass rounded-2xl p-6">
+        <p class="font-semibold text-slate-200 mb-4">✅ সাপোর্টেড প্ল্যাটফর্ম</p>
+        <div class="supported-grid">
+            <div class="sup-item"><span style="color:#1877f2">📘</span> Facebook</div>
+            <div class="sup-item"><span style="color:#ff4444">▶️</span> YouTube</div>
+            <div class="sup-item"><span style="color:#00f2ea">🎵</span> TikTok</div>
+            <div class="sup-item"><span style="color:#e1306c">📸</span> Instagram</div>
+            <div class="sup-item"><span style="color:#1da1f2">🐦</span> Twitter / X</div>
+            <div class="sup-item"><span style="color:#ff4514">🤖</span> Reddit</div>
+            <div class="sup-item"><span style="color:#1ab7ea">🎥</span> Vimeo</div>
+            <div class="sup-item"><span style="color:#0099cc">📡</span> Dailymotion</div>
+            <div class="sup-item"><span style="color:#9146ff">🎮</span> Twitch</div>
+            <div class="sup-item"><span style="color:#e60019">📌</span> Pinterest</div>
+            <div class="sup-item"><span style="color:#0077b5">💼</span> LinkedIn</div>
+            <div class="sup-item"><span style="color:#d4d400">👻</span> Snapchat</div>
+        </div>
+        <p class="text-xs text-slate-500 mt-3">* yt-dlp দিয়ে ১০০০+ সাইট সাপোর্টেড</p>
+    </div>
+
+</main>
+
+<script>
+const PLATFORM_INFO = {
+    facebook:    { icon: '📘', color: '#1877f2', label: 'Facebook' },
+    youtube:     { icon: '▶️', color: '#ff4444', label: 'YouTube' },
+    tiktok:      { icon: '🎵', color: '#00f2ea', label: 'TikTok' },
+    instagram:   { icon: '📸', color: '#e1306c', label: 'Instagram' },
+    twitter:     { icon: '🐦', color: '#1da1f2', label: 'Twitter / X' },
+    reddit:      { icon: '🤖', color: '#ff4514', label: 'Reddit' },
+    vimeo:       { icon: '🎥', color: '#1ab7ea', label: 'Vimeo' },
+    dailymotion: { icon: '📡', color: '#0099cc', label: 'Dailymotion' },
+    twitch:      { icon: '🎮', color: '#9146ff', label: 'Twitch' },
+    pinterest:   { icon: '📌', color: '#e60019', label: 'Pinterest' },
+    linkedin:    { icon: '💼', color: '#0077b5', label: 'LinkedIn' },
+    snapchat:    { icon: '👻', color: '#d4d400', label: 'Snapchat' },
+    unknown:     { icon: '🌐', color: '#94a3b8', label: 'অন্যান্য' },
+};
+
+function detectPlatform(url) {
+    if (!url) return 'unknown';
+    if (/facebook\.com|fb\.watch/i.test(url))    return 'facebook';
+    if (/youtube\.com|youtu\.be/i.test(url))     return 'youtube';
+    if (/tiktok\.com|vm\.tiktok\.com/i.test(url)) return 'tiktok';
+    if (/instagram\.com/i.test(url))             return 'instagram';
+    if (/twitter\.com|x\.com/i.test(url))        return 'twitter';
+    if (/reddit\.com|v\.redd\.it/i.test(url))    return 'reddit';
+    if (/vimeo\.com/i.test(url))                 return 'vimeo';
+    if (/dailymotion\.com|dai\.ly/i.test(url))   return 'dailymotion';
+    if (/twitch\.tv|clips\.twitch/i.test(url))   return 'twitch';
+    if (/pinterest\.com|pin\.it/i.test(url))     return 'pinterest';
+    if (/linkedin\.com/i.test(url))              return 'linkedin';
+    if (/snapchat\.com/i.test(url))              return 'snapchat';
+    return 'unknown';
+}
+
+document.getElementById('videoUrl').addEventListener('input', function() {
+    const p = detectPlatform(this.value.trim());
+    const info = PLATFORM_INFO[p] || PLATFORM_INFO.unknown;
+    const indicator = document.getElementById('platformIndicator');
+    const badge = document.getElementById('platformBadge');
+    if (this.value.trim()) {
+        badge.className = `platform-badge badge-${p}`;
+        badge.innerHTML = `${info.icon} ${info.label}`;
+        indicator.classList.remove('hidden');
+    } else {
+        indicator.classList.add('hidden');
+    }
+});
+
+async function pasteUrl() {
+    try {
+        const text = await navigator.clipboard.readText();
+        document.getElementById('videoUrl').value = text;
+        document.getElementById('videoUrl').dispatchEvent(new Event('input'));
+    } catch {}
+}
+
+function formatDuration(secs) {
+    if (!secs) return '';
+    const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = Math.floor(secs % 60);
+    if (h) return `⏱ ${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    return `⏱ ${m}:${String(s).padStart(2,'0')}`;
+}
+
+function formatSize(bytes) {
+    if (!bytes) return '—';
+    if (bytes > 1e9) return (bytes/1e9).toFixed(1)+' GB';
+    if (bytes > 1e6) return (bytes/1e6).toFixed(1)+' MB';
+    return (bytes/1e3).toFixed(0)+' KB';
+}
+
+function formatViews(n) {
+    if (!n) return '';
+    if (n >= 1e6) return `👁 ${(n/1e6).toFixed(1)}M`;
+    if (n >= 1e3) return `👁 ${(n/1e3).toFixed(0)}K`;
+    return `👁 ${n}`;
+}
+
+async function fetchVideo() {
+    const url = document.getElementById('videoUrl').value.trim();
+    if (!url) { showToast('⚠️ একটি ভিডিও লিংক দিন'); return; }
+
+    const quality = document.querySelector('input[name="quality"]:checked').value;
+    const btn = document.getElementById('downloadBtn');
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> প্রসেস হচ্ছে...';
+    hide('resultCard'); hide('errorCard');
+
+    try {
+        const res = await fetch('/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url, quality })
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+            showError(data.detail?.message || data.message || 'কিছু একটা ভুল হয়েছে।');
+            return;
+        }
+
+        showResult(data);
+    } catch (e) {
+        showError('সার্ভারের সাথে সংযোগ স্থাপন করতে ব্যর্থ।');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-download"></i> ডাউনলোড লিংক বের করুন';
+    }
+}
+
+function showResult(data) {
+    const vi = data.video_info || {};
+    const platform = data.platform || detectPlatform(document.getElementById('videoUrl').value);
+    const info = PLATFORM_INFO[platform] || PLATFORM_INFO.unknown;
+
+    document.getElementById('platformResult').innerHTML =
+        `<span class="platform-badge badge-${platform}">${info.icon} ${info.label}</span>`;
+    document.getElementById('videoTitle').textContent = vi.title || '(শিরোনাম নেই)';
+
+    const thumb = document.getElementById('thumbnail');
+    if (vi.thumbnail) { thumb.src = vi.thumbnail; thumb.style.display = ''; }
+    else thumb.style.display = 'none';
+
+    document.getElementById('videoDuration').textContent = formatDuration(vi.duration);
+    document.getElementById('videoUploader').textContent  = vi.uploader ? `👤 ${vi.uploader}` : '';
+    document.getElementById('videoViews').textContent     = formatViews(vi.view_count);
+
+    const bestBtn = document.getElementById('bestDownload');
+    if (data.download_url) {
+        bestBtn.href = `/stream/video?url=${encodeURIComponent(data.download_url)}`;
+        bestBtn.style.display = '';
+    } else {
+        bestBtn.style.display = 'none';
+    }
+
+    const formats = data.available_formats || [];
+    const fSection = document.getElementById('formatsSection');
+    const fBody    = document.getElementById('formatsBody');
+    if (formats.length) {
+        fBody.innerHTML = formats.map(f => `
+            <tr>
+                <td><span style="font-weight:600;color:#a5b4fc">${f.quality}</span></td>
+                <td><span style="color:#94a3b8">${f.ext?.toUpperCase() || 'MP4'}</span></td>
+                <td><span style="color:#94a3b8">${formatSize(f.filesize)}</span></td>
+                <td>
+                    <a href="/stream/video?url=${encodeURIComponent(f.url)}"
+                       target="_blank" class="btn-download" style="padding:6px 12px; font-size:12px;">
+                        <i class="fas fa-download"></i> ডাউনলোড
+                    </a>
+                </td>
+            </tr>
+        `).join('');
+        fSection.classList.remove('hidden');
+    } else {
+        fSection.classList.add('hidden');
+    }
+
+    show('resultCard');
+}
+
+function showError(msg) {
+    document.getElementById('errorMsg').textContent = msg;
+    show('errorCard');
+}
+
+function show(id) { document.getElementById(id).classList.remove('hidden'); }
+function hide(id) { document.getElementById(id).classList.add('hidden'); }
+
+function showToast(msg) {
+    const t = document.createElement('div');
+    t.className = 'toast';
+    t.innerHTML = `<span>${msg}</span>`;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 3000);
+}
+</script>
+</body>
+</html>
